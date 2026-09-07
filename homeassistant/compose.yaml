@@ -1,0 +1,59 @@
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    network_mode: host
+    volumes:
+      - /opt/appdata/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    privileged: true
+
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    networks:
+      - default
+      - mqtt-shared
+    ports:
+      - 1883:1883 # unencrypted traffic
+      - 8883:8883 # TLS/SSL traffic
+      - 9001:9001 # MQTT over websocket
+    volumes:
+      - /opt/appdata/homeassistant/mosquitto/config:/mosquitto/config
+      - /opt/appdata/homeassistant/mosquitto/data:/mosquitto/data
+    environment:
+      TZ: "America/Chicago"
+
+  ring-mqtt:
+    container_name: ring-mqtt
+    image: tsightler/ring-mqtt
+    restart: unless-stopped
+    ports:
+      - 8554:8554 # RTSP livestream access
+      - 55123:55123 # used for initial setup for Ring auth
+    volumes:
+      - /opt/appdata/homeassistant/ring:/data
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  matter-server:
+    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    container_name: matter-server
+    restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
+    network_mode: host
+    volumes:
+      - /run/dbus:/run/dbus:ro          # BlueZ access for BLE commissioning
+      - /opt/appdata/homeassistant/matter-server:/data       # PERSISTENT fabric credentials — see below
+    command:
+      - --storage-path
+      - /data
+
+networks:
+  mqtt-shared:
+    external: true

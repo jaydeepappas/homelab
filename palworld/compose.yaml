@@ -1,0 +1,37 @@
+services:
+   palworld:
+      image: thijsvanloef/palworld-server-docker:latest
+      restart: unless-stopped
+      container_name: palworld
+      stop_grace_period: 10s
+      ports:
+        - 8211:8211/udp
+        - 27015:27015/udp
+        # - 8212:8212/tcp  # REST API enabled port, enabled by default. DO NOT PORT FORWARD THIS.
+      env_file:
+        - .env
+      environment:
+         PUID: 1000
+         PGID: 1000
+         PORT: 8211
+         PLAYERS: 8
+         SERVER_PASSWORD: ""
+         REST_API_ENABLED: true
+         REST_API_PORT: 8212
+         TZ: "America/Chicago"
+         ADMIN_PASSWORD: "admin"
+         COMMUNITY: false
+         SERVER_NAME: "jd-fuckbois-palworld"
+         SERVER_DESCRIPTION: "palworld server for the fuckbois"
+         CROSSPLAY_PLATFORMS: "(Steam,Xbox,PS5,Mac)"
+         DELETE_OLD_BACKUPS: true
+         OLD_BACKUP_DAYS: 7
+         AUTO_REBOOT_ENABLED: true
+         AUTO_REBOOT_CRON_EXPRESSION: "0 4 * * *"
+         AUTO_PAUSE_ENABLED: true
+         DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+         DISCORD_PRE_BACKUP_DELETE_MESSAGE_ENABLED: false
+         DISCORD_POST_BACKUP_DELETE_MESSAGE_ENABLED: false
+         DISCORD_ERR_BACKUP_DELETE_MESSAGE_ENABLED: false
+      volumes:
+         - /opt/appdata/palworld/palworld:/palworld/

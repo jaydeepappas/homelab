@@ -1,0 +1,53 @@
+services:
+  teslamate:
+    image: teslamate/teslamate:4.2.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - default
+      - mqtt-shared
+    environment:
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DATABASE_USER=teslamate
+      - DATABASE_PASS=${TESLAMATE_DB_PASSWORD}
+      - DATABASE_NAME=teslamate
+      - DATABASE_HOST=database
+      - MQTT_HOST=mosquitto
+    ports:
+      - 4000:4000
+    volumes:
+      - /opt/appdata/teslamate/import:/opt/app/import
+    cap_drop:
+      - all
+
+  database:
+    image: postgres:18-trixie
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=teslamate
+      - POSTGRES_PASSWORD=${TESLAMATE_DB_PASSWORD}
+      - POSTGRES_DB=teslamate
+    volumes:
+      - /opt/appdata/teslamate/pgdata:/var/lib/postgresql
+
+  grafana:
+    image: teslamate/grafana:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_USER=teslamate
+      - DATABASE_PASS=${TESLAMATE_DB_PASSWORD}
+      - DATABASE_NAME=teslamate
+      - DATABASE_HOST=database
+    ports:
+      - 3000:3000
+    volumes:
+      - /opt/appdata/teslamate/grafana:/var/lib/grafana
+
+networks:
+  mqtt-shared:
+    external: true

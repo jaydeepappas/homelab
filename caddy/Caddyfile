@@ -1,0 +1,33 @@
+{
+    email jaydeepappas@gmail.com
+}
+
+*.jaydeepappas.me {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+
+    @ha host ha.jaydeepappas.me
+    handle @ha {
+        reverse_proxy localhost:8123
+    }
+
+    @pihole host pihole.jaydeepappas.me
+    handle @pihole {
+        reverse_proxy localhost:8081
+    }
+
+    @teslamate host teslamate.jaydeepappas.me
+    handle @teslamate {
+        reverse_proxy localhost:4000
+    }
+
+    @grafana host grafana.jaydeepappas.me
+    handle @grafana {
+        reverse_proxy localhost:3000
+    }
+
+    handle {
+        respond "no route :(" 404
+    }
+}
