@@ -29,6 +29,15 @@ KEEP_LOCAL=2                             # finished archives to keep on-box
 # Remote retention is handled by an R2 bucket lifecycle policy, not this script.
 LOG="/var/log/homelab-backup.log"
 
+# --- notifications -----------------------------------------------------------
+# Discord webhook is a secret -> keep it OUT of this script (and out of git).
+# Put it in a root-only file:  echo 'DISCORD_WEBHOOK="https://..."' > /etc/homelab-backup.env
+#                              chmod 600 /etc/homelab-backup.env
+[ -f /etc/homelab-backup.env ] && . /etc/homelab-backup.env
+DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"   # empty = notifications disabled
+NOTIFY_ON_SUCCESS=true                    # daily heartbeat; set false for failures-only
+ARCHIVE_SIZE="?"                          # filled in once the archive is built
+
 DATE="$(date +%F_%H%M%S)"
 STAGE="${STAGING_ROOT}/${DATE}"
 ARCHIVE="${STAGING_ROOT}/homelab-${DATE}.tar"   # outer tar is uncompressed:
@@ -39,6 +48,14 @@ ARCHIVE="${STAGING_ROOT}/homelab-${DATE}.tar"   # outer tar is uncompressed:
 log(){ printf '%s  %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
 die(){ log "FATAL: $*"; exit 1; }
 require(){ command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; }
+
+# post a Discord embed. No-op if no webhook configured. Never fatal.
+notify(){  # $1=color(int)  $2=title  $3=description
+  [ -n "$DISCORD_WEBHOOK" ] || return 0
+  curl -fsS -m 15 -H 'Content-Type: application/json' \
+    -d "{\"embeds\":[{\"title\":\"$2\",\"description\":\"$3\",\"color\":$1}]}" \
+    "$DISCORD_WEBHOOK" >/dev/null 2>&1 || log "  WARN: Discord notify failed"
+}
 
 # resolve a running container id by name substring (avoids compose project-name coupling)
 cid(){ docker ps --filter "name=$1" --format '{{.ID}}' | head -n1; }
@@ -60,10 +77,26 @@ sqlite_backup(){  # $1=src  $2=dest(.db.gz)
 }
 
 ### -------------------------------------------------------------- preflight ---
-require docker; require rclone; require sqlite3; require tar; require gzip
+require docker; require rclone; require sqlite3; require tar; require gzip; require curl
 [ "$(id -u)" -eq 0 ] || die "must run as root (reads container-owned files under /opt)"
 mkdir -p "$STAGE" "$(dirname "$LOG")"
-trap 'rm -rf "$STAGE"' EXIT      # always clean staging; the finished archive lives outside it
+
+# runs on ANY exit: clean staging, then ping Discord with the outcome.
+finish(){
+  local rc=$?
+  rm -rf "$STAGE"
+  if [ "$rc" -eq 0 ]; then
+    if [ "$NOTIFY_ON_SUCCESS" = true ]; then
+      notify 3066993 "✅ homelab backup succeeded" \
+        "\`$(hostname)\` — ${ARCHIVE_SIZE} uploaded to \`${RCLONE_REMOTE}\`"
+    fi
+  else
+    notify 15158332 "❌ homelab backup failed" \
+      "\`$(hostname)\` — exited $rc. Check \`${LOG}\`."
+  fi
+}
+trap finish EXIT
+
 log "=== backup start ${DATE} ==="
 
 ### -------------------------------------------------- TeslaMate (Postgres) ---
@@ -137,7 +170,8 @@ fi
 ### ------------------------------------------------------------ pack + ship ---
 log "packing archive"
 tar cf "$ARCHIVE" -C "$STAGE" .
-log "archive ${ARCHIVE} ($(du -h "$ARCHIVE" | cut -f1))"
+ARCHIVE_SIZE="$(du -h "$ARCHIVE" | cut -f1)"
+log "archive ${ARCHIVE} (${ARCHIVE_SIZE})"
 
 log "uploading to ${RCLONE_REMOTE}"
 rclone copy "$ARCHIVE" "$RCLONE_REMOTE"
