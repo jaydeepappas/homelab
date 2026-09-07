@@ -1,7 +1,6 @@
 .env
 *.env
 !*.env.example          # allow committed templates
-teslamate/tesla_auth/
 
 # keys / certs / tokens
 *.pem
