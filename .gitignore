@@ -1,6 +1,5 @@
 .env
 *.env
-!*.env.example          # allow committed templates
 .sops.yaml
 
 # keys / certs / tokens
