@@ -12,11 +12,6 @@
         reverse_proxy localhost:8123
     }
 
-#    @pihole host pihole.jaydeepappas.me
-#    handle @pihole {
-#        reverse_proxy localhost:8081
-#    }
-
     @teslamate host teslamate.jaydeepappas.me
     handle @teslamate {
         reverse_proxy localhost:4000
