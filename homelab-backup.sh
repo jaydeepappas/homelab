@@ -134,19 +134,38 @@ tar czf "$STAGE/homeassistant/ring.tar.gz"          -C "$APPDATA/homeassistant" 
 tar czf "$STAGE/homeassistant/matter-server.tar.gz" -C "$APPDATA/homeassistant" matter-server
 tar czf "$STAGE/homeassistant/mosquitto.tar.gz"     -C "$APPDATA/homeassistant" mosquitto
 
-### --------------------------------------------------------------- Pi-hole ---
-log "Pi-hole: sqlite snapshots + config"
-mkdir -p "$STAGE/pihole"
-sqlite_backup "$APPDATA/pihole/etc-pihole/gravity.db"    "$STAGE/pihole/gravity.db"
-sqlite_backup "$APPDATA/pihole/etc-pihole/pihole-FTL.db" "$STAGE/pihole/pihole-FTL.db"
-# config files (toml, custom lists, tls, password) minus the live dbs + rotating dupes
-tar czf "$STAGE/pihole/etc-pihole.tar.gz" \
-  --exclude='etc-pihole/*.db' \
-  --exclude='etc-pihole/*.db-wal' \
-  --exclude='etc-pihole/*.db-shm' \
-  --exclude='etc-pihole/gravity_backups' \
-  --exclude='etc-pihole/config_backups' \
-  -C "$APPDATA/pihole" etc-pihole
+### -------------------------------------------------------------- Jellyfin ---
+# Media files themselves live on the NAS/media mounts and are NOT part of this backup --
+# only Jellyfin's own state under its /config mount is. What we keep vs drop:
+#   data/*.db     SQLite databases (see version note)         -> sqlite_backup (WAL-safe)
+#   config/*.xml  server config (system/network/encoding/branding/users)  -> tar
+#   plugins/      installed plugins + their configuration                 -> tar
+#   root/         default library skeleton                                -> tar
+# Dropped as regenerable/ephemeral: cache, log, transcodes, and metadata
+# (artwork/NFO -- re-scrapable, and big enough to blow the ~2 GB staging budget).
+#
+# DB version note: pre-10.11 the single database is library.db. 10.11 moved to an
+# EF Core split (jellyfin.db + authentication.db) and library.db can linger through
+# the migration. We snapshot all three; the helper just skips whichever don't exist.
+# Also: Jellyfin has NO downgrade path -- starting a new major applies migrations
+# immediately, so a snapshot taken *before* an upgrade is your only way back.
+log "Jellyfin: db snapshots + config + plugins (media + caches excluded)"
+mkdir -p "$STAGE/jellyfin"
+JF="$APPDATA/jellyfin"          # host dir mounted to the container's /config -- confirm for your setup
+sqlite_backup "$JF/data/jellyfin.db"       "$STAGE/jellyfin/jellyfin.db"
+sqlite_backup "$JF/data/library.db"        "$STAGE/jellyfin/library.db"
+sqlite_backup "$JF/data/authentication.db" "$STAGE/jellyfin/authentication.db"
+# everything else, minus the live dbs (snapshotted above) and the regenerable/bulky trees
+tar czf "$STAGE/jellyfin/config.tar.gz" \
+  --exclude='jellyfin/data/*.db' \
+  --exclude='jellyfin/data/*.db-wal' \
+  --exclude='jellyfin/data/*.db-shm' \
+  --exclude='jellyfin/data/*.db-journal' \
+  --exclude='jellyfin/cache' \
+  --exclude='jellyfin/log' \
+  --exclude='jellyfin/transcodes' \
+  --exclude='jellyfin/metadata' \
+  -C "$APPDATA" jellyfin
 
 ### ----------------------------------------------------------------- Caddy ---
 log "Caddy: certs + config"
