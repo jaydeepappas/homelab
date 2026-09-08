@@ -27,6 +27,11 @@
         reverse_proxy localhost:3000
     }
 
+    @jellyfin host jellyfin.jaydeepappas.me
+    handle @jellyfin {
+        reverse_proxy localhost:8096
+    }
+
     handle {
         respond "no route :(" 404
     }
