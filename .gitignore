@@ -1,6 +1,5 @@
 .env
 *.env
-.sops.yaml
 
 # keys / certs / tokens
 *.pem
