@@ -12,3 +12,4 @@ tesla_auth
 tailscale
 htop
 
+~/.config/sops/age/keys.txt
