@@ -1,7 +1,7 @@
 services:
   homeassistant:
     container_name: homeassistant
-    image: "ghcr.io/home-assistant/home-assistant:stable"
+    image: "ghcr.io/home-assistant/home-assistant:2026.9.1"
     network_mode: host
     volumes:
       - /opt/appdata/homeassistant/config:/config
@@ -28,7 +28,7 @@ services:
 
   ring-mqtt:
     container_name: ring-mqtt
-    image: tsightler/ring-mqtt
+    image: tsightler/ring-mqtt:5.9.3
     restart: unless-stopped
     ports:
       - 8554:8554 # RTSP livestream access
