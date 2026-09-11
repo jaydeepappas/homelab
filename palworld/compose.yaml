@@ -19,7 +19,7 @@ services:
          REST_API_ENABLED: true
          REST_API_PORT: 8212
          TZ: "America/Chicago"
-         ADMIN_PASSWORD: "admin"
+         ADMIN_PASSWORD: ${ADMIN_PASSWORD}
          COMMUNITY: false
          SERVER_NAME: "jd-fuckbois-palworld"
          SERVER_DESCRIPTION: "palworld server for the fuckbois"
