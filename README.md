@@ -2,23 +2,25 @@
 
 ## tailscale
 
-all devices run `Tailscale`. devices within my tailnet can reach services hosted on the homelab via MagicDNS at `homelab.ocicat-bortle.ts.net:PORT` or Tailscale's assigned IPv4 address. for simplicity/memorability, all device IPs have been manually reassigned to `100.75.75.x` addresses. see the bottom of the README for a table with hosts/IPs/ports.
+all devices run `tailscale`. devices within my tailnet can reach services hosted on the homelab via MagicDNS at `homelab.ocicat-bortle.ts.net:PORT` or tailscale's assigned IPv4 address. for simplicity/memorability, all device IPs have been manually reassigned to `100.75.75.x` addresses. see the bottom of the README for a table with hosts/IPs/ports.
 
 rather than inviting people into my tailnet, the homelab node is shared out to them. shared users only see this node, and can reach it at the homelab IP address. this is used for others to access the palworld server as well as homeassistant.
 
+i am also using the `mullvad` VPN addon for tailscale,
+
 ## cloudflare
 
-services can also be accessed via my domain `jaydeepappas.me`, which is registered and DNS-hosted through `Cloudflare`. there exists a wildcard `*.jaydeepappas.me` A record which points to the homelab IP, so hosted subdomains are reachable via more human-friendly names.
+services can also be accessed via my domain `jaydeepappas.me`, which is registered and DNS-hosted through `cloudflare`. there exists a wildcard `*.jaydeepappas.me` A record which points to the homelab IP, so hosted subdomains are reachable via more human-friendly names.
 
-note that this record must not be proxied through Cloudflare (no orange cloud), and the apex domain does not resolve to anything without another explicit A record.
+note that this record must not be proxied through cloudflare (no orange cloud), and the apex domain does not resolve to anything without another explicit A record.
 
 ## caddy
 
-the above Cloudflare configuration requires `Caddy` as a reverse proxy to route traffic by some subdomain to some port. for example, incoming traffic matching `ha.jaydeepappas.me` is routed to `localhost:8123`. tailscale already encrypts all traffic in transit, so plain HTTP over the tailnet is low-risk. however, browsers and password managers can be finicky when visiting HTTP sites, so i've opted into using HTTPS.
+the above cloudflare configuration requires `caddy` as a reverse proxy to route traffic by some subdomain to some port. for example, incoming traffic matching `ha.jaydeepappas.me` is routed to `localhost:8123`. tailscale already encrypts all traffic in transit, so plain HTTP over the tailnet is low-risk. however, browsers and password managers can be finicky when visiting HTTP sites, so i've opted into using HTTPS.
 
-Caddy handles HTTPS by default, but its default certificate challenges require Let's Encrypt to connect inbound to the homelab server, which it can't do since the A records point to a private tailnet IP. to get around this we opt into the DNS-01 challenge to prove domain ownership by creating a temporary TXT record through the Cloudflare API. the stock Caddy image ships without DNS provider modules, so `caddy/Dockerfile` uses `xcaddy` to bring in the [`caddy-dns/cloudflare`](https://github.com/caddy-dns/cloudflare) module for this certificate validation flow.
+caddy handles HTTPS by default, but its default certificate challenges require `let's encrypt` to connect inbound to the homelab server, which it can't do since the A records point to a private tailnet IP. to get around this we opt into the DNS-01 challenge to prove domain ownership by creating a temporary TXT record through the cloudflare API. the stock caddy image ships without DNS provider modules, so `caddy/Dockerfile` uses `xcaddy` to bring in the [`caddy-dns/cloudflare`](https://github.com/caddy-dns/cloudflare) module for this certificate validation flow.
 
-the Cloudflare API token Caddy uses for this needs `Zone:Zone:Read` to look up the zone ID and `Zone:DNS:Edit` to write the challenge record, scoped to the `jaydeepappas.me` zone. note that a missing or expired token fails silently until the cert actually needs renewing.
+the cloudflare API token caddy uses for this needs `Zone:Zone:Read` to look up the zone ID and `Zone:DNS:Edit` to write the challenge record, scoped to the `jaydeepappas.me` zone. note that a missing or expired token fails silently until the cert actually needs renewing.
 
 ## access
 
