@@ -13,9 +13,6 @@ services:
     container_name: mosquitto
     image: eclipse-mosquitto:2
     restart: unless-stopped
-    networks:
-      - default
-      - mqtt-shared
     ports:
       - 1883:1883 # unencrypted traffic
       - 8883:8883 # TLS/SSL traffic
@@ -53,7 +50,3 @@ services:
     command:
       - --storage-path
       - /data
-
-networks:
-  mqtt-shared:
-    external: true

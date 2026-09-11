@@ -4,16 +4,13 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    networks:
-      - default
-      - mqtt-shared
     environment:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - DATABASE_USER=teslamate
       - DATABASE_PASS=${TESLAMATE_DB_PASSWORD}
       - DATABASE_NAME=teslamate
       - DATABASE_HOST=database
-      - MQTT_HOST=mosquitto
+      - DISABLE_MQTT=true
     ports:
       - 4000:4000
     volumes:
@@ -47,7 +44,3 @@ services:
       - 3000:3000
     volumes:
       - /opt/appdata/teslamate/grafana:/var/lib/grafana
-
-networks:
-  mqtt-shared:
-    external: true
