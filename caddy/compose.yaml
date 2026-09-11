@@ -1,6 +1,6 @@
 services:
   caddy:
-    image: caddy-cf:latest
+    image: caddy-cf:latest # custom image, build with `docker build -t caddy-cf:latest caddy/`
     container_name: caddy
     restart: unless-stopped
     network_mode: host

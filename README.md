@@ -2,11 +2,18 @@
 
 ### tailscale
 
-all devices run `Tailscale`. devices within my tailnet can reach hosted services via MagicDNS `ocicat-bortle.ts.net` or Tailscale's assigned IPv4 address. for simplicity/memorability, internal IPs have been manually reassigned to `10.75.75.x` addresses.
+all devices run `Tailscale`. devices within my tailnet can reach services hosted on the homelab via MagicDNS at `homelab.ocicat-bortle.ts.net:PORT` or Tailscale's assigned IPv4 address. for simplicity/memorability, all device IPs have been manually reassigned to `100.75.75.x` addresses.
+
+ - homelab: `100.75.75.0`
+ - desktop: `100.75.75.1`
+ - macbook: `100.75.75.2`
+ - iphone: `100.75.75.3`
+ - starfront: `100.75.75.4`
+ - apple-tv (living room): `100.75.75.5`
 
 ### cloudflare
 
-services can also be access via my domain `jaydeepappas.me`, which is owned by `Cloudflare`. there exists a wilcard `*.jaydeepappas.me` A record which points to the homelab IP `100.75.75.0`, so hosted subdomains are reachable via more human-friendly names.
+services can also be access via my domain `jaydeepappas.me`, which is owned by `Cloudflare`. there exists a wilcard `*.jaydeepappas.me` A record which points to the homelab IP, so hosted subdomains are reachable via more human-friendly names.
 
 ### caddy
 
@@ -16,7 +23,7 @@ Caddy handles HTTPS by default, but its default certificate challenges require L
 
 ### access
 
-homelab can be SSH'd into from machines that are inside the tailnet and have a matching kay pair. see `~/.ssh/authorized_keys`.
+homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair. see `~/.ssh/authorized_keys`.
 
 # backups
 
@@ -34,9 +41,11 @@ since all docker mounts live in `/opt`, the backup script must run as root. this
 
 all secrets are encrypted via `sops` using an `age`-generated X25519 key pair. encrypting secrets allows us to check encrypted files containing secrets into github, providing a source of truth and auditing for all things secrets related. `.sops.yaml` defines the public key and which files should be encrypted. the private key lives at `~/.config/sops/age/keys.txt`. since losing the private key renders `secrets.enc.yaml` a paperweight, the private key is also stored securely in Bitwarden.
 
-run `sops -e -i secrets.enc.yaml` to encrypt a file in place.
-run `sops -d secrets.enc.yaml` to decrypt a file to stdout.
-run `sops secrets.enc.yaml` to decrypt in your editor (re-encrypts on save).
+ - run `sops -e -i secrets.enc.yaml` to encrypt a file in place.
+
+ - run `sops -d secrets.enc.yaml` to decrypt a file to stdout.
+
+ - run `sops secrets.enc.yaml` to decrypt in your editor (re-encrypts on save).
 
 
 ################################################
@@ -54,3 +63,5 @@ tesla_auth
 tailscale
 
 htop
+
+encrypt backups?
