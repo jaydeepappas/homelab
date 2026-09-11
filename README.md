@@ -1,18 +1,18 @@
 # networking
 
-### tailscale
+## tailscale
 
 all devices run `Tailscale`. devices within my tailnet can reach services hosted on the homelab via MagicDNS at `homelab.ocicat-bortle.ts.net:PORT` or Tailscale's assigned IPv4 address. for simplicity/memorability, all device IPs have been manually reassigned to `100.75.75.x` addresses. see the bottom of the README for a table with hosts/IPs/ports.
 
 rather than inviting people into my tailnet, the homelab node is shared out to them. shared users only see this node, and can reach it at the homelab IP address. this is used for others to access the palworld server as well as homeassistant.
 
-### cloudflare
+## cloudflare
 
 services can also be accessed via my domain `jaydeepappas.me`, which is registered and DNS-hosted through `Cloudflare`. there exists a wildcard `*.jaydeepappas.me` A record which points to the homelab IP, so hosted subdomains are reachable via more human-friendly names.
 
 note that this record must not be proxied through Cloudflare (no orange cloud), and the apex domain does not resolve to anything without another explicit A record.
 
-### caddy
+## caddy
 
 the above Cloudflare configuration requires `Caddy` as a reverse proxy to route traffic by some subdomain to some port. for example, incoming traffic matching `ha.jaydeepappas.me` is routed to `localhost:8123`. tailscale already encrypts all traffic in transit, so plain HTTP over the tailnet is low-risk. however, browsers and password managers can be finicky when visiting HTTP sites, so i've opted into using HTTPS.
 
@@ -20,7 +20,7 @@ Caddy handles HTTPS by default, but its default certificate challenges require L
 
 the Cloudflare API token Caddy uses for this needs `Zone:Zone:Read` to look up the zone ID and `Zone:DNS:Edit` to write the challenge record, scoped to the `jaydeepappas.me` zone. note that a missing or expired token fails silently until the cert actually needs renewing.
 
-### access
+## access
 
 homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair. see `~/.ssh/authorized_keys`. this is enforced by firewall rules, allowing ssh only on the tailscale0 interface and denying it everywhere else:
 
@@ -29,11 +29,11 @@ homelab can be SSH'd into from machines that are inside the tailnet and have a m
 
 # backups
 
-### docker
+## docker
 
 all docker volumes have been created as bind mounts and moved to a central location `/opt/appdata` for backup simplicity.
 
-### backup script
+## backup script
 
 backups are handled via a script that runs nightly on a cron and pushes a tarball to `r2`. see `scripts/homelab-backup.sh` for AI slop shell script that works just fine. the script uses `rclone`, whose config lives at `/home/jaydee/.config/rclone/rclone.conf`. since the script runs as root (whose `~` is `/root`), it passes this path to rclone explicitly.
 
