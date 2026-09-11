@@ -6,7 +6,9 @@ all devices run `tailscale`. devices within my tailnet can reach services hosted
 
 rather than inviting people into my tailnet, the homelab node is shared out to them. shared users only see this node, and can reach it at the homelab IP address. this is used for others to access the palworld server as well as homeassistant.
 
-i am also using the `mullvad` VPN addon for tailscale,
+i am also using the `mullvad` VPN addon for tailscale, which allows for choosing an exit node on any device in my tailnet on a per-client basis, obscuring IPs for private browsing. using an exit node on the homelab server routes all of its outbound traffic through mullvad, which breaks anything that depends on a stable, reputable source IP: caddy's calls to the cloudflare API for cert renewal, the tesla fleet API, and other outbound integrations all get rate-limited or rejected when they come from a shared mullvad exit node. therefore there is no exit node set on this server:
+
+    sudo tailscale set --exit-node=
 
 ## cloudflare
 
