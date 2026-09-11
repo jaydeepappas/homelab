@@ -1,5 +1,5 @@
 {
-    email jaydeepappas@gmail.com
+    email {env.CADDY_EMAIL}
 }
 
 *.jaydeepappas.me {

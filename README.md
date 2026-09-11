@@ -45,6 +45,8 @@ containers write files into their bind mounts as their own UIDs, often with rest
 
     00 3 * * * /usr/local/bin/homelab-backup.sh >> /var/log/homelab-backup-cron.log 2>&1
 
+the script logs to `/var/log/homelab-backup.log`; the crontab line above also redirects stdout/stderr to `/var/log/homelab-backup-cron.log`, which catches failures that happen before the script can log anything itself. it also posts to a private discord channel on both success and failure.
+
 # secrets
 
 all secrets are tracked in `secrets.enc.yaml`, encrypted via `SOPS` using an `age`-generated X25519 key pair. note that secret values are still ingested via plaintext `.env` files in each docker compose stack that are not checked in; the value of the SOPS-encrypted file is the ability to check it into github, providing a source of truth and auditing for all things secrets related.
