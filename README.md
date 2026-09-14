@@ -73,9 +73,18 @@ restic reads the repo, password, and r2 creds from the environment, so load the 
 
     set -a; . scripts/.env; set +a
     restic snapshots --tag homelab
-    restic restore latest --target /some/dir
+    sudo -E restic restore latest --target /var/tmp/restore
 
-DB snapshots restore under `/var/lib/homelab-backup/dumps/` and have to be copied back into place by hand.
+restic recreates full absolute paths underneath `--target`, so the above gives you `/var/tmp/restore/opt/appdata/...` and `/var/tmp/restore/var/lib/homelab-backup/dumps/...`. on a fresh machine you can skip staging entirely and restore straight onto the real paths with `--target /`. **never do this on a running machine**, as restic will overwrite live database files underneath a running container.
+
+live databases are deliberately excluded from the file backup, because they're captured separately via `pg_dump` / sqlite's `.backup` API. the dumps have to be placed by hand:
+
+    dumps/homeassistant/home-assistant_v2.db  ->  /opt/appdata/homeassistant/config/
+    dumps/jellyfin/jellyfin.db                ->  /opt/appdata/jellyfin/config/data/
+    dumps/teslamate/grafana.db                ->  /opt/appdata/teslamate/grafana/
+    dumps/teslamate/teslamate-db.sql          ->  psql import
+
+when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` siblings first.
 
 # services
 
