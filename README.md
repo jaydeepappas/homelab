@@ -42,7 +42,7 @@ the cloudflare API token caddy uses for this needs `Zone:Zone:Read` to look up t
 
 ## access
 
-homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair. see `~/.ssh/authorized_keys`. this is enforced by firewall rules, allowing ssh only on the tailscale0 interface and denying it everywhere else:
+homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair (using `openssh`, **not** `tailscale ssh`. see `~/.ssh/authorized_keys`. this is enforced by firewall rules, allowing ssh only on the tailscale0 interface and denying it everywhere else:
 
     sudo ufw allow in on `tailscale0` to any port 22 proto tcp
     sudo ufw deny 22/tcp
