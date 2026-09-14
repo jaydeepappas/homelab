@@ -2,6 +2,18 @@
 
 docker compose stacks for my home server, plus the networking, backup, and secrets tooling. everything runs baremetal on a single box reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
 
+# tooling
+
+CLI tools are pinned and installed with `mise` via `mise.toml`. if doing a fresh install:
+
+    curl -fsSL https://mise.run | sh
+    mise trust
+    mise install
+
+`tailscale` cannot be installed via mise:
+
+    curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
+
 # networking
 
 ## tailscale
@@ -85,18 +97,6 @@ live databases are deliberately excluded from the file backup, because they're c
     dumps/teslamate/teslamate-db.sql          ->  psql import
 
 when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` siblings first.
-
-# tooling
-
-CLI tools are pinned and installed with `mise` via `mise.toml`. if doing a fresh install:
-
-    curl -fsSL https://mise.run | sh
-    mise trust
-    mise install
-
-`tailscale` cannot be installed via mise:
-
-    curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
 
 # services
 
