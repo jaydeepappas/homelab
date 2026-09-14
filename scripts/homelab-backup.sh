@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 #
-# homelab-backup.sh
-# Consistent, ZERO-DOWNTIME backup of all /opt/appdata service state to R2 (plain, no crypt).
+# backup of all /opt/appdata to r2 via restic
 #
-#   - Postgres (TeslaMate)      -> pg_dump over a live connection
+#   - Postgres (TeslaMate)      -> pg_dump over a live connection, to a plain .sql file
 #   - live SQLite DBs           -> sqlite3 .backup (online-backup API, WAL-safe)
-#   - everything else           -> tar (config, certs, tokens, fabric creds, saves)
-#   - Palworld game install      -> EXCLUDED (re-downloadable via SteamCMD)
-#   - upload                     -> rclone to a plain R2 remote
+#   - everything else           -> restic reads the files directly off disk
+#   - Palworld game install     -> EXCLUDED (re-downloadable via SteamCMD)
+#   - upload                    -> restic to R2 (encrypted, deduped, versioned)
 #
-# NOTE: the archive is uploaded UNENCRYPTED. A few files in it are account-level
-# credentials (Ring tokens, Tesla Fleet key, HA secrets.yaml). Bucket safety rests
-# entirely on your R2 API token + keeping the bucket private. Decided trade-off.
+# repo is encrypted with a RESTIC_PASSWORD
 #
 # Nothing is stopped. Run as root (needs to read container-owned files under /opt).
 #
@@ -19,77 +16,132 @@ set -euo pipefail
 
 ### ----------------------------------------------------------------- config ---
 APPDATA="/opt/appdata"
-STAGING_ROOT="/var/tmp/homelab-backup"    # scratch; needs room for one run (< ~2 GB here)
-# rclone's config lives under the normal user, but this script runs as root (sudo), whose
-# HOME is /root with no config -> point rclone at the user's config explicitly so every
-# rclone call below resolves the remote regardless of who runs it.
-export RCLONE_CONFIG="/home/jaydee/.config/rclone/rclone.conf"
-RCLONE_REMOTE="r2:homelab"                # remote 'r2' + dedicated folder
-KEEP_LOCAL=2                             # finished archives to keep on-box
-# Remote retention is handled by an R2 bucket lifecycle policy, not this script.
+DUMPS="/var/lib/homelab-backup/dumps"     # derived artifacts (pg_dump, sqlite snapshots)
+                                          # fixed path, NOT date-stamped: restic dedupes on
+                                          # content, and a stable path keeps snapshot
+                                          # browsing/restore predictable across runs.
 LOG="/var/log/homelab-backup.log"
 
-# --- notifications -----------------------------------------------------------
-# Discord webhook is a secret -> keep it OUT of this script (and out of git).
-# Put it in a root-only file:  echo 'DISCORD_WEBHOOK="https://..."' > /etc/homelab-backup.env
-#                              chmod 600 /etc/homelab-backup.env
-[ -f /etc/homelab-backup.env ] && . /etc/homelab-backup.env
-DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"   # empty = notifications disabled
-NOTIFY_ON_SUCCESS=true                    # daily heartbeat; set false for failures-only
-ARCHIVE_SIZE="?"                          # filled in once the archive is built
+# --- secrets / env -----------------------------------------------------------
+# ENV_FILE holds:
+#   AWS_ACCESS_KEY_ID      R2 API token (restic's S3 backend uses the AWS var names)
+#   AWS_SECRET_ACCESS_KEY
+#   DISCORD_WEBHOOK
+#   RESTIC_PASSWORD
+#   RESTIC_REPOSITORY      s3:https://<ACCOUNT_ID>.r2.cloudflarestorage.com/homelab-restic
+#
+# ABSOLUTE PATH ONLY. This script runs as root, whose ~ is /root -- a path written as
+# ~/stacks/... silently resolves to /root/stacks/... and sources nothing.
+ENV_FILE="/home/jaydee/stacks/scripts/.env"
+set -a
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+set +a
+
+DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"    # empty = notifications disabled
+NOTIFY_ON_SUCCESS=true                    # set false for failures-only
+
+# --- retention ---------------------------------------------------------------
+# not handled by an R2 lifecycle rule. A lifecycle policy deleting objects
+# out of a restic repo corrupts it: packs are content-addressed and shared between
+# snapshots, so aging out an "old" pack can break last night's snapshot too.
+KEEP_DAILY=7
+KEEP_WEEKLY=4
+KEEP_MONTHLY=6
+
+# Full data verification is slow but egress from R2 is free. Run on Sundays.
+CHECK_DAY=7                               # set to 0 to disable
 
 DATE="$(date +%F_%H%M%S)"
-STAGE="${STAGING_ROOT}/${DATE}"
-ARCHIVE="${STAGING_ROOT}/homelab-${DATE}.tar"   # outer tar is uncompressed:
-                                                # members are already individually gzipped,
-                                                # so partial restore stays trivial.
+JSONLOG="$(mktemp)"
 
 ### ---------------------------------------------------------------- helpers ---
 log(){ printf '%s  %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
 die(){ log "FATAL: $*"; exit 1; }
 require(){ command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; }
+human(){ numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1:-0}B"; }
 
 # post a Discord embed. No-op if no webhook configured. Never fatal.
+# Body is built with jq so quotes/newlines in the description can't break the JSON.
 notify(){  # $1=color(int)  $2=title  $3=description
   [ -n "$DISCORD_WEBHOOK" ] || return 0
-  curl -fsS -m 15 -H 'Content-Type: application/json' \
-    -d "{\"embeds\":[{\"title\":\"$2\",\"description\":\"$3\",\"color\":$1}]}" \
-    "$DISCORD_WEBHOOK" >/dev/null 2>&1 || log "  WARN: Discord notify failed"
+  jq -n --argjson c "$1" --arg t "$2" --arg d "$3" \
+     '{embeds:[{title:$t,description:$d,color:$c}]}' \
+  | curl -fsS -m 15 -H 'Content-Type: application/json' -d @- \
+      "$DISCORD_WEBHOOK" >/dev/null 2>&1 || log "  WARN: Discord notify failed"
 }
 
 # resolve a running container id by name substring (avoids compose project-name coupling)
 cid(){ docker ps --filter "name=$1" --format '{{.ID}}' | head -n1; }
 
-# consistent snapshot of a live sqlite db (WAL-safe), gzipped. Non-fatal: a single
-# locked/missing db warns and continues rather than killing the whole run.
-# dest should end in .db.gz -- we snapshot to a temp file then compress.
-sqlite_backup(){  # $1=src  $2=dest(.db.gz)
-  [ -f "$1" ] || { log "  sqlite skip (missing): $1"; return 0; }
-  local tmp="${2%.gz}"
-  if sqlite3 "$1" ".timeout 10000" ".backup '$tmp'"; then
-    gzip -f "$tmp"                     # -> $2
+# consistent snapshot of a live sqlite db (WAL-safe).
+#
+# NOTE: no gzip. Compressing before restic destroys dedupe -- a one-row change rewrites
+# the whole gzip stream, so restic would see an entirely new blob every night. Plain
+# files dedupe well, and restic compresses on its own (repo format v2).
+#
+# _sqlite_snap does the work; the two wrappers decide whether a problem is fatal.
+_sqlite_snap(){  # $1=src  $2=dest(.db)
+  [ -f "$1" ] || return 2                       # missing
+  if sqlite3 "$1" ".timeout 10000" ".backup '$2'"; then
     log "  sqlite ok: $(basename "$1") ($(du -h "$2" | cut -f1))"
-  else
-    rm -f "$tmp"
-    log "  WARN: sqlite backup failed (locked?): $1"
+    return 0
   fi
+  rm -f "$2"
+  return 1                                      # locked / failed
+}
+
+# OPTIONAL db: absence is expected (version-dependent files). Warn, continue.
+sqlite_optional(){
+  local rc=0; _sqlite_snap "$1" "$2" || rc=$?
+  case "$rc" in
+    0) : ;;
+    2) log "  sqlite skip (missing, optional): $1" ;;
+    *) log "  WARN: sqlite backup failed (locked?): $1" ;;
+  esac
   return 0
 }
 
-### -------------------------------------------------------------- preflight ---
-require docker; require rclone; require sqlite3; require tar; require gzip; require curl
-[ "$(id -u)" -eq 0 ] || die "must run as root (reads container-owned files under /opt)"
-mkdir -p "$STAGE" "$(dirname "$LOG")"
+# REQUIRED db: if it's missing or unreadable the backup isn't trustworthy, so stop.
+# This is the guard that would have caught the Jellyfin path being wrong -- a run that
+# silently skips its own inputs must not report success.
+sqlite_required(){
+  local rc=0; _sqlite_snap "$1" "$2" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    2) die "required database missing: $1 (path changed? container moved?)" ;;
+    *) die "required database could not be snapshotted (locked?): $1" ;;
+  esac
+}
 
-# runs on ANY exit: clean staging, then ping Discord with the outcome.
+### -------------------------------------------------------------- preflight ---
+require docker; require restic; require sqlite3; require jq; require curl
+[ "$(id -u)" -eq 0 ] || die "must run as root (reads container-owned files under /opt)"
+[ -f "$ENV_FILE" ]              || die "env file not found: $ENV_FILE"
+[ -n "${RESTIC_REPOSITORY:-}" ]    || die "RESTIC_REPOSITORY unset (check $ENV_FILE)"
+[ -n "${RESTIC_PASSWORD:-}" ]      || die "RESTIC_PASSWORD unset (check $ENV_FILE)"
+[ -n "${AWS_ACCESS_KEY_ID:-}" ]    || die "AWS_ACCESS_KEY_ID unset (check $ENV_FILE)"
+[ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || die "AWS_SECRET_ACCESS_KEY unset (check $ENV_FILE)"
+
+rm -rf "$DUMPS"
+mkdir -p "$DUMPS" "$(dirname "$LOG")"
+chmod 700 /var/lib/homelab-backup
+
+SUMMARY="(no summary)"
+
+# runs on ANY exit: clean dumps, then ping Discord with the outcome.
 finish(){
   local rc=$?
-  rm -rf "$STAGE"
+  rm -rf "$DUMPS" "$JSONLOG"
   if [ "$rc" -eq 0 ]; then
     if [ "$NOTIFY_ON_SUCCESS" = true ]; then
       notify 3066993 "✅ homelab backup succeeded" \
-        "\`$(hostname)\` — ${ARCHIVE_SIZE} uploaded to \`${RCLONE_REMOTE}\`"
+        "\`$(hostname)\`"$'\n'"$SUMMARY"
     fi
+  elif [ "$rc" -eq 10 ]; then
+    # partial: snapshot written, but restic couldn't read everything. Yellow, not red --
+    # you still have a restore point, but something needs looking at.
+    notify 16776960 "⚠️ homelab backup incomplete" \
+      "\`$(hostname)\` — snapshot written, some files unreadable."$'\n'"$SUMMARY"$'\n'"Check \`${LOG}\`."
   else
     notify 15158332 "❌ homelab backup failed" \
       "\`$(hostname)\` — exited $rc. Check \`${LOG}\`."
@@ -101,103 +153,129 @@ log "=== backup start ${DATE} ==="
 
 ### -------------------------------------------------- TeslaMate (Postgres) ---
 log "TeslaMate: pg_dump + grafana"
-mkdir -p "$STAGE/teslamate"
+mkdir -p "$DUMPS/teslamate"
 DB_CID="$(cid teslamate-database)"
 [ -n "$DB_CID" ] || die "teslamate database container not running"
 # creds pulled from the container's own env -> no secrets in this script
 docker exec "$DB_CID" sh -c \
   'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
-  | gzip > "$STAGE/teslamate/teslamate-db.sql.gz"
-log "  postgres dumped ($(du -h "$STAGE/teslamate/teslamate-db.sql.gz" | cut -f1))"
-sqlite_backup "$APPDATA/teslamate/grafana/grafana.db" "$STAGE/teslamate/grafana.db"
+  > "$DUMPS/teslamate/teslamate-db.sql"
+log "  postgres dumped ($(du -h "$DUMPS/teslamate/teslamate-db.sql" | cut -f1))"
+sqlite_required "$APPDATA/teslamate/grafana/grafana.db" "$DUMPS/teslamate/grafana.db"
 
 ### ------------------------------------------------------- Home Assistant ---
-log "Home Assistant: recorder snapshot + config + ring + matter + mosquitto"
-mkdir -p "$STAGE/homeassistant"
-# recorder db: consistent live snapshot (we exclude the raw file from the config tar below)
-sqlite_backup "$APPDATA/homeassistant/config/home-assistant_v2.db" \
-              "$STAGE/homeassistant/home-assistant_v2.db"
-# config tree (INCLUDING hidden .storage -- the entity/device/auth registry) minus:
-#   live db, HA's own redundant backups, logs, regenerable caches
-tar czf "$STAGE/homeassistant/config.tar.gz" \
-  --exclude='config/home-assistant_v2.db' \
-  --exclude='config/home-assistant_v2.db-wal' \
-  --exclude='config/home-assistant_v2.db-shm' \
-  --exclude='config/backups' \
-  --exclude='config/home-assistant.log*' \
-  --exclude='config/deps' \
-  --exclude='config/tts' \
-  --exclude='*/__pycache__' \
-  -C "$APPDATA/homeassistant" config
-# small, precious, copy-whole:
-tar czf "$STAGE/homeassistant/ring.tar.gz"          -C "$APPDATA/homeassistant" ring
-tar czf "$STAGE/homeassistant/matter-server.tar.gz" -C "$APPDATA/homeassistant" matter-server
-tar czf "$STAGE/homeassistant/mosquitto.tar.gz"     -C "$APPDATA/homeassistant" mosquitto
+log "Home Assistant: recorder snapshot"
+mkdir -p "$DUMPS/homeassistant"
+sqlite_required "$APPDATA/homeassistant/config/home-assistant_v2.db" \
+                "$DUMPS/homeassistant/home-assistant_v2.db"
+# the config tree itself (including hidden .storage) is read straight off disk by restic.
 
 ### -------------------------------------------------------------- Jellyfin ---
-# Media files themselves live on the NAS/media mounts and are NOT part of this backup --
-# only Jellyfin's own state under its /config mount is. What we keep vs drop:
-#   data/*.db     SQLite databases (see version note)         -> sqlite_backup (WAL-safe)
-#   config/*.xml  server config (system/network/encoding/branding/users)  -> tar
-#   plugins/      installed plugins + their configuration                 -> tar
-#   root/         default library skeleton                                -> tar
-# Dropped as regenerable/ephemeral: cache, log, transcodes, and metadata
-# (artwork/NFO -- re-scrapable, and big enough to blow the ~2 GB staging budget).
+# JF is the host dir mounted to the container's /config. The databases live one level
+# further down, at $JF/data -- NOT at $APPDATA/jellyfin/data.
 #
 # DB version note: pre-10.11 the single database is library.db. 10.11 moved to an
 # EF Core split (jellyfin.db + authentication.db) and library.db can linger through
-# the migration. We snapshot all three; the helper just skips whichever don't exist.
+# the migration. jellyfin.db is required; the other two are optional by version.
 # Also: Jellyfin has NO downgrade path -- starting a new major applies migrations
 # immediately, so a snapshot taken *before* an upgrade is your only way back.
-log "Jellyfin: db snapshots + config + plugins (media + caches excluded)"
-mkdir -p "$STAGE/jellyfin"
-JF="$APPDATA/jellyfin"          # host dir mounted to the container's /config -- confirm for your setup
-sqlite_backup "$JF/data/jellyfin.db"       "$STAGE/jellyfin/jellyfin.db"
-sqlite_backup "$JF/data/library.db"        "$STAGE/jellyfin/library.db"
-sqlite_backup "$JF/data/authentication.db" "$STAGE/jellyfin/authentication.db"
-# everything else, minus the live dbs (snapshotted above) and the regenerable/bulky trees
-tar czf "$STAGE/jellyfin/config.tar.gz" \
-  --exclude='jellyfin/data/*.db' \
-  --exclude='jellyfin/data/*.db-wal' \
-  --exclude='jellyfin/data/*.db-shm' \
-  --exclude='jellyfin/data/*.db-journal' \
-  --exclude='jellyfin/cache' \
-  --exclude='jellyfin/log' \
-  --exclude='jellyfin/transcodes' \
-  --exclude='jellyfin/metadata' \
-  -C "$APPDATA" jellyfin
+log "Jellyfin: db snapshots"
+mkdir -p "$DUMPS/jellyfin"
+JF="$APPDATA/jellyfin/config"
+sqlite_required "$JF/data/jellyfin.db"       "$DUMPS/jellyfin/jellyfin.db"
+sqlite_optional "$JF/data/library.db"        "$DUMPS/jellyfin/library.db"
+sqlite_optional "$JF/data/authentication.db" "$DUMPS/jellyfin/authentication.db"
 
-### ----------------------------------------------------------------- Caddy ---
-log "Caddy: certs + config"
-mkdir -p "$STAGE/caddy"
-tar czf "$STAGE/caddy/caddy.tar.gz" -C "$APPDATA" caddy
+### ------------------------------------------------------------ back it up ---
+# Explicit source paths rather than a blanket /opt/appdata sweep. Two reasons:
+#   - TeslaMate's live Postgres data dir must NOT be swept in (torn, large, useless --
+#     the pg_dump above is the real backup). A wholesale sweep would grab it.
+#   - Palworld's game install and live Pal/Saved tree sit under the same parent as the
+#     container's own quiesced save tarballs, which are the only part worth keeping.
+# Cost: a NEW service under /opt/appdata is not backed up until it's added here.
+# Periodically diff this list against `ls /opt/appdata`.
+SOURCES=(
+  "$DUMPS"
+  "$APPDATA/homeassistant"
+  "$APPDATA/jellyfin"
+  "$APPDATA/caddy"
+  "$APPDATA/palworld/palworld/backups"
+)
 
-### -------------------------------------------------------------- Palworld ---
-# Ship the container's OWN save tarballs, not the live Pal/Saved tree: the image makes
-# those at a quiesced save point (consistent), whereas tarring the live tree races the
-# server's rolling writes. Game install is re-downloadable -> skipped either way.
-log "Palworld: container save tarballs (live tree + game binaries excluded)"
-mkdir -p "$STAGE/palworld"
-PW="$APPDATA/palworld/palworld"
-if [ -d "$PW/backups" ] && [ -n "$(ls -A "$PW/backups" 2>/dev/null)" ]; then
-  tar czf "$STAGE/palworld/save-tarballs.tar.gz" -C "$PW" backups
-  log "  shipped $(ls -1 "$PW/backups" | wc -l) save tarball(s)"
-else
-  log "  WARN: no Palworld save tarballs found in $PW/backups"
+EXCLUDES=(
+  # live DBs -- snapshotted above via the online-backup API
+  --exclude "$APPDATA/homeassistant/config/home-assistant_v2.db*"
+  --exclude "$JF/data/*.db"
+  --exclude "$JF/data/*.db-wal"
+  --exclude "$JF/data/*.db-shm"
+  --exclude "$JF/data/*.db-journal"
+  # HA: redundant internal backups, logs, regenerable caches
+  --exclude "$APPDATA/homeassistant/config/backups"
+  --exclude "$APPDATA/homeassistant/config/home-assistant.log*"
+  --exclude "$APPDATA/homeassistant/config/deps"
+  --exclude "$APPDATA/homeassistant/config/tts"
+  --exclude "__pycache__"
+  # Jellyfin: regenerable / bulky (metadata is re-scrapable artwork + NFO)
+  --exclude "$JF/cache"
+  --exclude "$JF/log"
+  --exclude "$JF/transcodes"
+  --exclude "$JF/metadata"
+  # anything marked with a CACHEDIR.TAG
+  --exclude-caches
+)
+
+log "restic backup -> ${RESTIC_REPOSITORY}"
+set +e
+restic backup "${SOURCES[@]}" "${EXCLUDES[@]}" \
+  --tag homelab --host "$(hostname)" --json >"$JSONLOG" 2>>"$LOG"
+RC=$?
+set -e
+
+# restic exit codes: 0 = clean, 3 = snapshot written but some files were unreadable.
+# Treat 3 as a distinct outcome, NOT as success -- the old script had no way to tell.
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 3 ]; then
+  die "restic backup failed (exit $RC)"
 fi
 
-### ------------------------------------------------------------ pack + ship ---
-log "packing archive"
-tar cf "$ARCHIVE" -C "$STAGE" .
-ARCHIVE_SIZE="$(du -h "$ARCHIVE" | cut -f1)"
-log "archive ${ARCHIVE} (${ARCHIVE_SIZE})"
+# last summary line carries the run stats
+if S="$(jq -c 'select(.message_type=="summary")' "$JSONLOG" | tail -n1)" && [ -n "$S" ]; then
+  SNAP="$(jq -r '.snapshot_id[0:8]'          <<<"$S")"
+  ADDED="$(jq -r '.data_added'               <<<"$S")"
+  PROC="$(jq -r '.total_bytes_processed'     <<<"$S")"
+  NEW="$(jq -r '.files_new'                  <<<"$S")"
+  CHG="$(jq -r '.files_changed'              <<<"$S")"
+  DUR="$(jq -r '.total_duration | floor'     <<<"$S")"
+  SUMMARY="snapshot \`${SNAP}\` — $(human "$ADDED") added of $(human "$PROC") processed, ${NEW} new / ${CHG} changed files, ${DUR}s"
+  log "  $SUMMARY"
+fi
 
-log "uploading to ${RCLONE_REMOTE}"
-rclone copy "$ARCHIVE" "$RCLONE_REMOTE"
+[ "$RC" -eq 3 ] && log "WARN: some files were unreadable; snapshot is incomplete"
 
-### ----------------------------------------------------- local retention ---
-log "pruning local archives (keep ${KEEP_LOCAL})"
-# shellcheck disable=SC2012
-ls -1t "${STAGING_ROOT}"/homelab-*.tar 2>/dev/null | tail -n +$((KEEP_LOCAL+1)) | xargs -r rm -f
+### ----------------------------------------------------------- retention ---
+log "forget/prune (d=${KEEP_DAILY} w=${KEEP_WEEKLY} m=${KEEP_MONTHLY})"
+restic forget \
+  --tag homelab \
+  --keep-daily "$KEEP_DAILY" \
+  --keep-weekly "$KEEP_WEEKLY" \
+  --keep-monthly "$KEEP_MONTHLY" \
+  --prune >>"$LOG" 2>&1
+
+### -------------------------------------------------------- verification ---
+# `restic check` validates repo structure (cheap). --read-data re-downloads and
+# re-hashes every pack, which is the only way to actually prove the remote copy is
+# intact. Free on R2 (no egress charges), so run the full version weekly.
+if [ "$CHECK_DAY" -ne 0 ] && [ "$(date +%u)" -eq "$CHECK_DAY" ]; then
+  log "weekly restic check --read-data"
+  if ! restic check --read-data >>"$LOG" 2>&1; then
+    notify 15158332 "❌ restic check FAILED" \
+      "\`$(hostname)\` — repo integrity check failed. Check \`${LOG}\`."
+    die "restic check failed"
+  fi
+  log "  repo verified"
+fi
 
 log "=== backup done ${DATE} ==="
+
+# exit 10 (not 3) on partial, so the trap can tell it apart from restic's own codes
+[ "$RC" -eq 3 ] && exit 10
+exit 0

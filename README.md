@@ -35,26 +35,6 @@ homelab can be SSH'd into from machines that are inside the tailnet and have a m
     sudo ufw allow in on `tailscale0` to any port 22 proto tcp
     sudo ufw deny 22/tcp
 
-# backups
-
-## docker
-
-all docker volumes have been created as bind mounts and moved to a central location `/opt/appdata` for backup simplicity.
-
-## backup script
-
-backups are handled via a script that runs nightly on a cron and pushes a tarball to `r2`. see `scripts/homelab-backup.sh` for AI slop shell script that works just fine. the script uses `rclone`, whose config lives at `~/.config/rclone/rclone.conf`. since the script runs as root (whose `~` is `/root`), it passes this path to rclone explicitly.
-
-after making any changes to the script, run this from the repo root to copy it into `/usr/local/bin` with root ownership:
-
-    sudo install -m 700 scripts/homelab-backup.sh /usr/local/bin/homelab-backup.sh
-
-containers write files into their bind mounts as their own UIDs, often with restrictive permissions, so parts of `/opt/appdata` aren't readable by regular users. instead of `chown`ing the directory (this would break applications like postgres refusing to start if the data dir isn't owned by the user running it), we make the backup script run as root. this is added to root's crontab `sudo crontab -e`:
-
-    00 3 * * * /usr/local/bin/homelab-backup.sh >> /var/log/homelab-backup-cron.log 2>&1
-
-the script logs to `/var/log/homelab-backup.log`; the crontab line above also redirects stdout/stderr to `/var/log/homelab-backup-cron.log`, which catches failures that happen before the script can log anything itself. it also posts to a private discord channel on both success and failure.
-
 # secrets
 
 all secrets are tracked in `secrets.enc.yaml`, encrypted via `SOPS` using an `age`-generated X25519 key pair. note that secret values are still ingested via plaintext `.env` files in each docker compose stack that are not checked in; the value of the SOPS-encrypted file is the ability to check it into github, providing a source of truth and auditing for all things secrets related.
@@ -64,6 +44,38 @@ all secrets are tracked in `secrets.enc.yaml`, encrypted via `SOPS` using an `ag
  - `sops -e -i secrets.enc.yaml` encrypts a file in place
  - `sops -d secrets.enc.yaml` decrypts to stdout
  - `sops secrets.enc.yaml` decrypts in your editor (re-encrypts on save)
+
+# backups
+
+## docker
+
+all docker volumes have been created as bind mounts and moved to a central location `/opt/appdata` for backup simplicity.
+
+## backup script
+
+backups run nightly on a cron and push an encrypted snapshot to `r2` via [restic](https://restic.net). see `scripts/homelab-backup.sh` for AI slop shell script that works just fine. the script first makes any live databases safe to copy, using `pg_dump` for teslamate's postgres and sqlite's `.backup` API for HA's recorder, grafana, and jellyfin. these are dumped at `/var/lib/homelab-backup/dumps`. sources are listed explicitly in the script rather than sweeping all of `/opt/appdata`, so a new service isn't backed up until it's added to `SOURCES`. retention is `restic forget --prune` in the script, **not** an R2 lifecycle policy. restic packs are shared between snapshots, so aging out an "old" object can break a recent one. the bucket should not have any lifecycle policies that would remove restic-managed files.
+
+after making any changes to the script, run this from the repo root to copy it into `/usr/local/bin` with root ownership:
+
+    sudo install -m 700 scripts/homelab-backup.sh /usr/local/bin/homelab-backup.sh
+
+containers write files into their bind mounts as their own UIDs, often with restrictive permissions, so parts of `/opt/appdata` aren't readable by regular users. instead of `chown`ing the directory (this would break applications like postgres refusing to start if the data dir isn't owned by the user running it), we make the backup script run as root. this is added to root's crontab `sudo crontab -e`:
+
+    00 3 * * * /usr/local/bin/homelab-backup.sh >> /var/log/homelab-backup-cron.log 2>&1
+
+the script logs to `/var/log/homelab-backup.log`; the crontab line above also redirects stdout/stderr to `/var/log/homelab-backup-cron.log`, which catches failures that happen before the script can log anything itself. it also posts to a private discord channel: green on success, red on failure, yellow on a partial run.
+
+`scripts/.env.example` lists the required vars. the AWS creds are from an r2 API token from the cloudflare dashboard. the RESTIC_PASSWORD is stored in Bitwarden alongside the `age` private key, as losing this renders backups useless.
+
+## restore
+
+restic reads the repo, password, and r2 creds from the environment, so load the env file first:
+
+    set -a; . scripts/.env; set +a
+    restic snapshots --tag homelab
+    restic restore latest --target /some/dir
+
+DB snapshots restore under `/var/lib/homelab-backup/dumps/` and have to be copied back into place by hand.
 
 # services
 
@@ -79,9 +91,4 @@ all secrets are tracked in `secrets.enc.yaml`, encrypted via `SOPS` using an `ag
 
 disorganized list of tools i need to consolidate/mise-ify:
 
-sops, rclone, age, tesla_auth, tailscale, htop
-
-other things:
-
- - encrypt backups
- - scope tailscale node sharing with ACLs (`autogroup:shared`)
+sops, age, tesla_auth, tailscale, htop, restic
