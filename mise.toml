@@ -1,0 +1,6 @@
+[tools]
+sops = "3.13.3"
+age = "1.3.2"
+restic = "0.19.1"
+btop = "1.4.7"
+"github:adriankumpf/tesla_auth" = "0.15.0"

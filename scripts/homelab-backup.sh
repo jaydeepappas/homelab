@@ -40,6 +40,14 @@ set +a
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"    # empty = notifications disabled
 NOTIFY_ON_SUCCESS=true                    # set false for failures-only
 
+# --- PATH ---------------------------------------------------------------------
+# restic is mise-managed (see mise.toml at the repo root), so it lives under
+# jaydee's home dir, not /usr/bin. root's crontab never sources jaydee's shell rc
+# -- that's what normally puts mise's shims on PATH for an interactive shell --
+# so make it explicit here rather than depending on whatever PATH cron invokes
+# this script with.
+export PATH="/home/jaydee/.local/share/mise/shims:$PATH"
+
 # --- retention ---------------------------------------------------------------
 # not handled by an R2 lifecycle rule. A lifecycle policy deleting objects
 # out of a restic repo corrupts it: packs are content-addressed and shared between

@@ -53,7 +53,7 @@ all docker volumes have been created as bind mounts and moved to a central locat
 
 ## backup script
 
-backups run nightly on a cron and push an encrypted snapshot to `r2` via [restic](https://restic.net). see `scripts/homelab-backup.sh` for AI slop shell script that works just fine. the script first makes any live databases safe to copy, using `pg_dump` for teslamate's postgres and sqlite's `.backup` API for HA's recorder, grafana, and jellyfin. these are dumped at `/var/lib/homelab-backup/dumps`. sources are listed explicitly in the script rather than sweeping all of `/opt/appdata`, so a new service isn't backed up until it's added to `SOURCES`. retention is `restic forget --prune` in the script, **not** an R2 lifecycle policy. restic packs are shared between snapshots, so aging out an "old" object can break a recent one. the bucket should not have any lifecycle policies that would remove restic-managed files.
+backups run nightly on a cron and push an encrypted snapshot to `r2` via `restic`. see `scripts/homelab-backup.sh` for AI slop shell script that works just fine. the script first makes any live databases safe to copy, using `pg_dump` for teslamate's postgres and sqlite's `.backup` API for HA's recorder, grafana, and jellyfin. these are dumped at `/var/lib/homelab-backup/dumps`. sources are listed explicitly in the script rather than sweeping all of `/opt/appdata`, so a new service isn't backed up until it's added to `SOURCES`. retention is `restic forget --prune` in the script, **not** an R2 lifecycle policy. restic packs are shared between snapshots, so aging out an "old" object can break a recent one. the bucket should not have any lifecycle policies that would remove restic-managed files.
 
 after making any changes to the script, run this from the repo root to copy it into `/usr/local/bin` with root ownership:
 
@@ -86,6 +86,17 @@ live databases are deliberately excluded from the file backup, because they're c
 
 when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` siblings first.
 
+# tooling
+
+CLI tools are pinned and installed with `mise` via `mise.toml`. if doing a fresh install:
+
+    curl -fsSL https://mise.run | sh
+    mise trust
+    mise install
+
+`tailscale` cannot be installed via mise:
+    curl -fsSL https://tailscale.com | sh && sudo tailscale up
+
 # services
 
 | service | url | magicdns | port |
@@ -95,9 +106,3 @@ when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` si
 | grafana | https://grafana.jaydeepappas.me | `homelab.<tailnet>.ts.net:3000` | 3000 |
 | jellyfin | https://jellyfin.jaydeepappas.me | `homelab.<tailnet>.ts.net:8096` | 8096 |
 | palworld | n/a | `homelab.<tailnet>.ts.net:8211` | 8211/udp |
-
-# todo
-
-disorganized list of tools i need to consolidate/mise-ify:
-
-sops, age, tesla_auth, tailscale, htop, restic
