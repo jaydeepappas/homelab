@@ -124,9 +124,10 @@ require docker; require restic; require sqlite3; require jq; require curl
 
 rm -rf "$DUMPS"
 mkdir -p "$DUMPS" "$(dirname "$LOG")"
-chmod 700 /var/lib/homelab-backup
+chmod 700 "$(dirname "$DUMPS")"
 
 SUMMARY="(no summary)"
+DEGRADED=""                               # non-empty -> yellow, not green
 
 # runs on ANY exit: clean dumps, then ping Discord with the outcome.
 finish(){
@@ -138,10 +139,10 @@ finish(){
         "\`$(hostname)\`"$'\n'"$SUMMARY"
     fi
   elif [ "$rc" -eq 10 ]; then
-    # partial: snapshot written, but restic couldn't read everything. Yellow, not red --
-    # you still have a restore point, but something needs looking at.
-    notify 16776960 "⚠️ homelab backup incomplete" \
-      "\`$(hostname)\` — snapshot written, some files unreadable."$'\n'"$SUMMARY"$'\n'"Check \`${LOG}\`."
+    # degraded: the snapshot IS written and uploaded, but something downstream needs
+    # looking at. Yellow, not red -- you still have a restore point.
+    notify 16776960 "⚠️ homelab backup degraded" \
+      "\`$(hostname)\` — ${DEGRADED}"$'\n'"$SUMMARY"$'\n'"Check \`${LOG}\`."
   else
     notify 15158332 "❌ homelab backup failed" \
       "\`$(hostname)\` — exited $rc. Check \`${LOG}\`."
@@ -215,10 +216,12 @@ EXCLUDES=(
   --exclude "$APPDATA/homeassistant/config/deps"
   --exclude "$APPDATA/homeassistant/config/tts"
   --exclude "__pycache__"
-  # Jellyfin: regenerable / bulky (metadata is re-scrapable artwork + NFO)
-  --exclude "$JF/cache"
+  # Jellyfin: regenerable / bulky (metadata is re-scrapable artwork + NFO).
+  # NOTE the cache dir is a SEPARATE bind mount at $APPDATA/jellyfin/cache, a sibling of
+  # config/ -- not $JF/cache. It also holds transcodes. --exclude-caches happens to catch
+  # it via its CACHEDIR.TAG, but don't rely on Jellyfin continuing to write that file.
+  --exclude "$APPDATA/jellyfin/cache"
   --exclude "$JF/log"
-  --exclude "$JF/transcodes"
   --exclude "$JF/metadata"
   # anything marked with a CACHEDIR.TAG
   --exclude-caches
@@ -249,16 +252,34 @@ if S="$(jq -c 'select(.message_type=="summary")' "$JSONLOG" | tail -n1)" && [ -n
   log "  $SUMMARY"
 fi
 
-[ "$RC" -eq 3 ] && log "WARN: some files were unreadable; snapshot is incomplete"
+if [ "$RC" -eq 3 ]; then
+  DEGRADED="snapshot written, some files unreadable."
+  log "WARN: some files were unreadable; snapshot is incomplete"
+fi
 
 ### ----------------------------------------------------------- retention ---
+# --host matches the backup above: without it, retention would pool this box's snapshots
+# with any other host that ever writes to this repo under the same tag.
+#
+# A prune failure is NOT a backup failure -- the snapshot is already written and uploaded
+# by this point. Stale locks make prune fail often enough that reporting it red would cry
+# wolf about data that is in fact safe, so it degrades the run to yellow instead.
 log "forget/prune (d=${KEEP_DAILY} w=${KEEP_WEEKLY} m=${KEEP_MONTHLY})"
+set +e
 restic forget \
   --tag homelab \
+  --host "$(hostname)" \
   --keep-daily "$KEEP_DAILY" \
   --keep-weekly "$KEEP_WEEKLY" \
   --keep-monthly "$KEEP_MONTHLY" \
   --prune >>"$LOG" 2>&1
+PRUNE_RC=$?
+set -e
+
+if [ "$PRUNE_RC" -ne 0 ]; then
+  DEGRADED="${DEGRADED:+${DEGRADED} }forget/prune failed (exit ${PRUNE_RC}); snapshot is safe but retention was not applied."
+  log "WARN: forget/prune failed (exit $PRUNE_RC); snapshot is safe, retention not applied"
+fi
 
 ### -------------------------------------------------------- verification ---
 # `restic check` validates repo structure (cheap). --read-data re-downloads and
@@ -276,6 +297,6 @@ fi
 
 log "=== backup done ${DATE} ==="
 
-# exit 10 (not 3) on partial, so the trap can tell it apart from restic's own codes
-[ "$RC" -eq 3 ] && exit 10
+# exit 10 (not 3) on a degraded run, so the trap can tell it apart from restic's own codes
+[ -n "$DEGRADED" ] && exit 10
 exit 0
