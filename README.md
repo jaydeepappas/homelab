@@ -1,6 +1,6 @@
 # homelab
 
-docker compose stacks for my home server, plus the networking, backup, and secrets tooling. everything runs baremetal on a single box reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
+docker compose stacks for my home server plus the tooling, networking, and backup/restore methods. everything runs baremetal on a single box reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
 
 # tooling
 
