@@ -73,7 +73,7 @@ restic reads the repo, password, and r2 creds from the environment, so load the 
 
     set -a; . scripts/.env; set +a
     restic snapshots --tag homelab
-    sudo -E /home/jaydee/.local/bin/mise exec -C ~/stacks -- restic restore \ latest --target /var/tmp/restore --tag homelab
+    sudo -E /home/jaydee/.local/bin/mise exec -C ~/stacks -- restic restore latest --target /var/tmp/restore --tag homelab
 
 restic recreates full absolute paths underneath `--target`, so the above gives you `/var/tmp/restore/opt/appdata/...` and `/var/tmp/restore/var/lib/homelab-backup/dumps/...`. on a fresh machine you can skip staging entirely and restore straight onto the real paths with `--target /`. **never do this on a running machine**, as restic will overwrite live database files underneath a running container.
 
