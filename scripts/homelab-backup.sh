@@ -40,13 +40,20 @@ set +a
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"    # empty = notifications disabled
 NOTIFY_ON_SUCCESS=true                    # set false for failures-only
 
-# --- PATH ---------------------------------------------------------------------
+# --- mise-managed tools --------------------------------------------------------
 # restic is mise-managed (see mise.toml at the repo root), so it lives under
-# jaydee's home dir, not /usr/bin. root's crontab never sources jaydee's shell rc
-# -- that's what normally puts mise's shims on PATH for an interactive shell --
-# so make it explicit here rather than depending on whatever PATH cron invokes
-# this script with.
-export PATH="/home/jaydee/.local/share/mise/shims:$PATH"
+# jaydee's home dir, not /usr/bin. a bare `restic` on PATH -- even via mise's
+# shim -- isn't enough: mise picks the pinned version by walking up from the
+# CALLING PROCESS's cwd looking for mise.toml, and root's crontab has no reason
+# to be cd'd into ~/stacks, so that lookup would miss the pin entirely.
+# `mise exec -C <dir>` points mise straight at the right config regardless of
+# cwd. On Linux this is a real exec() -- mise replaces itself with the restic
+# process in place, so exit codes, stdio, and signals all pass through exactly
+# as if restic had been invoked directly (verified against mise's own source:
+# it calls exec::Command::exec(), not spawn-and-wait).
+REPO_DIR="/home/jaydee/stacks"
+export PATH="/home/jaydee/.local/bin:$PATH"   # so `mise` itself resolves
+restic() { mise exec -C "$REPO_DIR" -- restic "$@"; }
 
 # --- retention ---------------------------------------------------------------
 # not handled by an R2 lifecycle rule. A lifecycle policy deleting objects

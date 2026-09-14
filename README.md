@@ -95,7 +95,7 @@ CLI tools are pinned and installed with `mise` via `mise.toml`. if doing a fresh
     mise install
 
 `tailscale` cannot be installed via mise:
-    curl -fsSL https://tailscale.com | sh && sudo tailscale up
+    curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
 
 # services
 
