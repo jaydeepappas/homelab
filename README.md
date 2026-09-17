@@ -1,6 +1,18 @@
 # homelab
 
-docker compose stacks for my home server, plus the networking, backup, and secrets tooling. everything runs baremetal on a single box reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
+docker compose stacks for my home server plus the tooling, networking, and backup/restore methods. everything runs baremetal on a single box reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
+
+# tooling
+
+CLI tools are pinned and installed with `mise` via `mise.toml`. if doing a fresh install:
+
+    curl -fsSL https://mise.run | sh
+    mise trust
+    mise install
+
+`tailscale` cannot be installed via mise:
+
+    curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
 
 # networking
 
@@ -30,7 +42,7 @@ the cloudflare API token caddy uses for this needs `Zone:Zone:Read` to look up t
 
 ## access
 
-homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair. see `~/.ssh/authorized_keys`. this is enforced by firewall rules, allowing ssh only on the tailscale0 interface and denying it everywhere else:
+homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair (using `openssh`, **not** `tailscale ssh`. see `~/.ssh/authorized_keys`. this is enforced by firewall rules, allowing ssh only on the tailscale0 interface and denying it everywhere else:
 
     sudo ufw allow in on `tailscale0` to any port 22 proto tcp
     sudo ufw deny 22/tcp
@@ -85,18 +97,6 @@ live databases are deliberately excluded from the file backup, because they're c
     dumps/teslamate/teslamate-db.sql          ->  psql import
 
 when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` siblings first.
-
-# tooling
-
-CLI tools are pinned and installed with `mise` via `mise.toml`. if doing a fresh install:
-
-    curl -fsSL https://mise.run | sh
-    mise trust
-    mise install
-
-`tailscale` cannot be installed via mise:
-
-    curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
 
 # services
 
