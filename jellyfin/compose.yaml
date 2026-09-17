@@ -11,9 +11,9 @@ services:
       - /opt/appdata/jellyfin/config:/config
       - /opt/appdata/jellyfin/cache:/cache
       - type: bind
-        source: /mnt/storage/Media
-        target: /Media
-        read_only: true
+        source: /mnt/nas/media
+        target: /media
+        read_only: false
     restart: 'unless-stopped'
     # Optional - alternative address used for autodiscovery
     environment:
