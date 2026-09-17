@@ -7,6 +7,11 @@
         dns cloudflare {env.CF_API_TOKEN}
     }
 
+    @nas host nas.jaydeepappas.me
+    handle @nas {
+        reverse_proxy 100.75.75.255:5000
+    }
+
     @ha host ha.jaydeepappas.me
     handle @ha {
         reverse_proxy localhost:8123
