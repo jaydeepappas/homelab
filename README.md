@@ -47,6 +47,80 @@ homelab can be SSH'd into from machines that are inside the tailnet and have a m
     sudo ufw allow in on `tailscale0` to any port 22 proto tcp
     sudo ufw deny 22/tcp
 
+# NAS
+
+storage for homelab and other personal data. using a synology NAS for setup ease and hands-off approach. it is stricly a storage device and does not run any workloads other than the native tailscale plugin.
+
+## layout
+
+The `data` share (`/volume1/data`) is mounted on the homelab at `/mnt/nas` over NFSv4.1, across the tailnet, and mounts at boot via `/etc/fstab`.
+
+```
+/mnt/nas/
+├── media/  # jellyfin media
+├── x/
+├── y/
+└── z/
+```
+
+## access
+
+the nas can be accessed from any personal device on my tailnet using the tailnet IP, magicDNS, or friendly DNS. tagged devices (like the homelab) are owned by the tag, not by me, so they need an explicit grant, which is granted in the tailscale access policy.
+
+it is accessed via tailnet instead of LAN for consistent practices. this costs some throughput and requires a dependency on `tailscaled`, but is a trade-off i prefer due to simplicity and consistency.
+
+## rebuilding DSM from scratch
+
+1. create a `btrfs` volume; create a shared folder (`data` for example)
+2. install the `tailscale` package and run it. tag the new machine in tailscale with `tag:nas` to satisfy existing grants
+3. the `tailscale` package defaults to userspace networking, where NFS sees connections from `127.0.0.1` instead of the client's tailnet IP and denies them. fix via control panel → task scheduler → triggered task → boot-up, user `root`:
+
+   ```
+   /var/packages/Tailscale/target/bin/tailscale configure-host; synosystemctl restart pkgctl-Tailscale.service
+   ```
+
+   run it once manually. verify with `ip addr show tailscale0` over SSH
+4. set `NFSv4.1` via control panel → file services → NFS: enable, set max protocol to `NFSv4.1`
+5. on the `data` share: edit → NFS permissions. create an entry with:
+   - **hostname or IP**: the homelab's tailnet IP
+   - **privilege**: read/write
+   - **squash**: map all users to admin (avoids UID mismatches between container PUIDs and DSM's UIDs)
+6. enable SMB for easy windows network drive mapping via control panel → file services → SMB; min protocol SMB2
+7. enable automatic restarts: control panel → hardware & power → enable `restart automatically
+   when power supply issue is fixed`
+
+## rebuilding the mount on the homelab
+
+```bash
+sudo apt install nfs-common
+sudo mkdir -p /mnt/nas
+sudo chattr +i /mnt/nas # while unmounted
+```
+
+update `/etc/fstab`:
+
+```
+100.x.y.z:/volume1/data  /mnt/nas  nfs  nfsvers=4.1,hard,noatime,_netdev,nofail,retry=10,x-systemd.after=tailscaled.service,x-systemd.wants=tailscaled.service,x-systemd.mount-timeout=11min  0  0
+```
+
+then run:
+```bash
+sudo systemctl daemon-reload && sudo mount /mnt/nas && findmnt /mnt/nas
+```
+
+### above options explained
+
+- **`chattr +i` on the mountpoint** — if the mount is missing, writes fail loudly instead of quietly filling the local disk
+- **`hard`** — I/O blocks if the NAS disappears, rather than returning errors mid-write
+- **`noatime`** — stops the client from writing an access-time update every time a file is read
+- **`_netdev`** — marks this as a network filesystem, so systemd orders it after the network is up and unmounts it before teardown
+- **`nofail`** — a dead NAS doesn't drop a headless box into emergency mode.
+- **`retry=10` + `mount-timeout=11min`** — homelab boots faster than the nas. without retries the mount fails once and is never retried. systemd's default mount timeout is 90s so give it some breathing room
+- **`x-systemd.after/wants=tailscaled`** — `_netdev` only waits for `network-online.target`, but we want to wait for tailscale
+- **no `x-systemd.automount`** — autofs doesn't propagate into docker bind mounts under default `rprivate` propagation; containers see an empty dir or ELOOP
+
+note: if the mount hangs, retry=10 is swallowing the real error. retest with retry=0.
+
 # secrets
 
 all secrets are tracked in `secrets.enc.yaml`, encrypted via `SOPS` using an `age`-generated X25519 key pair. note that secret values are still ingested via plaintext `.env` files in each docker compose stack that are not checked in; the value of the SOPS-encrypted file is the ability to check it into github, providing a source of truth and auditing for all things secrets related.
@@ -102,6 +176,7 @@ when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` si
 
 | service | url | magicdns | port |
 |---|---|---|---|
+| nas | https://nas.jaydeepappas.me | `nas.<tailnet>.ts.net:8123` | 5000 |
 | homeassistant | https://ha.jaydeepappas.me | `homelab.<tailnet>.ts.net:8123` | 8123 |
 | teslamate | https://teslamate.jaydeepappas.me | `homelab.<tailnet>.ts.net:4000` | 4000 |
 | grafana | https://grafana.jaydeepappas.me | `homelab.<tailnet>.ts.net:3000` | 3000 |
