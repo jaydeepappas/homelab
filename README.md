@@ -1,6 +1,6 @@
 # homelab
 
-docker compose stacks for my home server plus the tooling, networking, and backup/restore methods. everything runs baremetal on a single box reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
+docker compose stacks for my home server plus the tooling, networking, and backup/restore methods. everything runs baremetal on a single box + a NAS for storage, reachable over tailscale, fronted by caddy for TLS + routing, with nightly backups pushed to cloudflare R2.
 
 # tooling
 
@@ -44,7 +44,7 @@ the cloudflare API token caddy uses for this needs `Zone:Zone:Read` to look up t
 
 homelab can be SSH'd into from machines that are inside the tailnet and have a matching key pair (using `openssh`, **not** `tailscale ssh`. see `~/.ssh/authorized_keys`. this is enforced by firewall rules, allowing ssh only on the tailscale0 interface and denying it everywhere else:
 
-    sudo ufw allow in on `tailscale0` to any port 22 proto tcp
+    sudo ufw allow in on tailscale0 to any port 22 proto tcp
     sudo ufw deny 22/tcp
 
 # NAS
@@ -176,7 +176,7 @@ when dropping a restored `.db` into place, delete the stale `-wal` and `-shm` si
 
 | service | url | magicdns | port |
 |---|---|---|---|
-| nas | https://nas.jaydeepappas.me | `nas.<tailnet>.ts.net:8123` | 5000 |
+| nas | https://nas.jaydeepappas.me | `nas.<tailnet>.ts.net:5000` | 5000 |
 | homeassistant | https://ha.jaydeepappas.me | `homelab.<tailnet>.ts.net:8123` | 8123 |
 | teslamate | https://teslamate.jaydeepappas.me | `homelab.<tailnet>.ts.net:4000` | 4000 |
 | grafana | https://grafana.jaydeepappas.me | `homelab.<tailnet>.ts.net:3000` | 3000 |
